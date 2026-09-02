@@ -18,6 +18,65 @@ This project automates the entire routing pipeline:
 
 ---
 
+## Mathematical Formulation & Operations Research Methodology
+
+The pipeline formalizes grocery trip planning as an **Orienteering Problem with Soft Penalty / Prize-Collecting Travelling Salesperson Problem (PCTSP)** with cumulative time dimension constraints and metric space embedings:
+
+### 1. Great-Circle Spherical Haversine Metric
+For initial spatial candidate clustering on the earth sphere of mean radius \(R \approx 3958.8\text{ miles}\), the geodesic distance between \(\mathbf{x}_1 = (\phi_1, \lambda_1)\) and \(\mathbf{x}_2 = (\phi_2, \lambda_2)\) is:
+\[
+d_H(\mathbf{x}_1, \mathbf{x}_2) = 2R \arcsin \left( \sqrt{\sin^2\left(\frac{\Delta\phi}{2}\right) + \cos\phi_1 \cos\phi_2 \sin^2\left(\frac{\Delta\lambda}{2}\right)} \right)
+\]
+This spatial metric satisfies the triangle inequality \(d_H(u, v) \le d_H(u, w) + d_H(w, v)\), allowing candidate pruning without expensive non-Euclidean road network graph queries.
+
+### 2. Mixed-Integer Program Formulation (Prize-Collecting TSP with Time Budget)
+Let \(G = (V, E)\) be a complete directed graph where:
+- \(V = \{0\} \cup \{1, \dots, n\} \cup \{n+1\}\), where \(0\) is the origin depot, \(n+1\) is the destination depot, and \(V_{\text{stores}} = \{1, \dots, n\}\) are candidate grocery stores.
+- \(c_{ij} \ge 0\) is the transit duration between node \(i\) and node \(j\) (derived from the OpenRouteService matrix).
+- \(s_i \ge 0\) is the fixed shopping service time at store \(i\) (\(s_0 = s_{n+1} = 0\)).
+- \(p_i > 0\) is the penalty for omitting store \(i\) (`SKIP_PENALTY`).
+- \(T_{\text{max}}\) is the total elapsed time budget (`TOTAL_HOURS \times 60`).
+
+Decision variables:
+- \(x_{ij} \in \{0, 1\}\): \(1\) if the vehicle travels directly from node \(i\) to node \(j\).
+- \(y_i \in \{0, 1\}\): \(1\) if store \(i \in V_{\text{stores}}\) is visited (\(y_0 = y_{n+1} = 1\)).
+- \(t_i \ge 0\): Arrival timestamp at node \(i\).
+
+**Objective Function**:
+\[
+\min \sum_{i \in V} \sum_{j \in V} c_{ij} x_{ij} + \sum_{i \in V_{\text{stores}}} p_i (1 - y_i)
+\]
+**Subject to**:
+- **Flow Conservation**:
+  \[
+  \sum_{j \in V \setminus \{0\}} x_{0j} = 1, \quad \sum_{i \in V \setminus \{n+1\}} x_{i, n+1} = 1
+  \]
+  \[
+  \sum_{j \in V \setminus \{i\}} x_{ij} = y_i, \quad \sum_{j \in V \setminus \{i\}} x_{ji} = y_i, \quad \forall i \in V_{\text{stores}}
+  \]
+- **Subtour Elimination & Arrival Time Propagation (Miller-Tucker-Zemlin constraints)**:
+  \[
+  t_j \ge t_i + s_i + c_{ij} - M(1 - x_{ij}), \quad \forall i, j \in V, \, j \ne 0
+  \]
+- **Time Budget Cap**:
+  \[
+  t_{n+1} \le T_{\text{max}}
+  \]
+
+### 3. Metaheuristic Search Strategy (OR-Tools)
+Because the Prize-Collecting TSP is \(\mathcal{NP}\)-hard, Google OR-Tools solves the system using:
+- **First Solution Heuristic**: `PATH_CHEAPEST_ARC` (greedy insertion minimizing marginal transit cost).
+- **Local Search Metaheuristic**: `GUIDED_LOCAL_SEARCH` (penalizes frequently visited local minima edges to escape suboptimal basins of attraction within time limits `TIME_LIMIT_1` and `TIME_LIMIT_2`).
+
+### 4. Two-Stage Spatial Corridor Dilation
+In Stage 2, candidate density is refined along the convex hull corridor \(\mathcal{C}\) between active route vertices \(u^*, v^*\):
+\[
+\text{Buffer}(\mathcal{C}, \delta) = \left\{ \mathbf{x} \in \mathbb{R}^2 \mid \inf_{\mathbf{y} \in \overline{u^* v^*}} \|\mathbf{x} - \mathbf{y}\|_2 \le \delta \right\}
+\]
+allowing local detours without suffering full combinatorial explosion over the entire county.
+
+---
+
 ## Tech Stack & Dependencies
 
 - **Language & Environment**: Python 3 / Jupyter Notebook (`GroceryStoreRoutes.ipynb`)
